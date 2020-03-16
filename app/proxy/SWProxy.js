@@ -7,8 +7,9 @@ const net = require('net');
 const url = require('url');
 const uuidv4 = require('uuid/v4');
 const Proxy = require('http-mitm-proxy');
+const zlib = require('zlib');
 
-const { decrypt_request, decrypt_response } = require('./smon_decryptor');
+const { decrypt_request, decrypt_response, encrypt, decrypt } = require('./smon_decryptor');
 
 class SWProxy extends EventEmitter {
   constructor() {
@@ -32,22 +33,57 @@ class SWProxy extends EventEmitter {
       if (ctx.clientToProxyRequest.url.includes('/api/gateway_c2.php')) {
         ctx.SWRequestChunks = [];
         ctx.SWResponseChunks = [];
+
         ctx.onRequestData(function(ctx, chunk, callback) {
           ctx.SWRequestChunks.push(chunk);
-          return callback(null, chunk);
+          return callback(null, null);
         });
+        ctx.onRequestEnd(function(ctx, callback) {
+          try {
+            let reqData = decrypt(Buffer.concat(ctx.SWRequestChunks).toString());
+            let command=JSON.parse(reqData).command
+            console.log('req :')
+            console.log(Buffer.concat(ctx.SWRequestChunks).toString())
+            /*
+            if (command=='BattleDimensionHoleDungeonStart'){
+              reqData=reqData.replace(/"practice_mode":\s+./g,'"practice_mode":\t0')
+            }*/
+            //BattleArenaResult
+            if (command=='BattleDungeonResult' || command=='BattleScenarioResult' || command=='BattleTrialTowerResult_v2' || command=='BattleDungeonResult_V2' || command == 'battleGuildMazeResult' || command=='BattleDimensionHoleDungeonResult'){
+              reqData=reqData.replace(/"result":\s+./g,'"result":\t2')
+              // DB10 cristals vivants:
+              //reqData= reqData.replace(/"unit_id":\t8419,\n\t\t\t"result":\t1/, '"unit_id":\t8419,\n\t\t\t"result":\t1')
+              //reqData= reqData.replace(/"unit_id":\t8420,\n\t\t\t"result":\t1/, '"unit_id":\t8420,\n\t\t\t"result":\t1')
+              reqData=reqData.replace(/"win_lose":\s+./g,'"win_lose":\t1')
 
+              //reqData=reqData.replace(/"wave_clear_count":\s+./g,'"wave_clear_count":\t3')
+              let clear_time=Math.floor(Math.random() * 60000)+150000
+              reqData=reqData.replace(/"clear_time":\s+.+,/g,'"clear_time":\t'+clear_time+',')      
+              console.log(JSON.parse(reqData))
+            }
+            else { console.log(command) }
+            ctx.proxyToServerRequest.write(encrypt(reqData))
+            return callback();
+          } catch(e){
+            console.log(e)
+            return callback();
+          }
+        });
         ctx.onResponseData(function(ctx, chunk, callback) {
           ctx.SWResponseChunks.push(chunk);
           return callback(null, chunk);
         });
+
         ctx.onResponseEnd(function(ctx, callback) {
           let reqData;
           let respData;
-
           try {
             reqData = decrypt_request(Buffer.concat(ctx.SWRequestChunks).toString());
             respData = decrypt_response(Buffer.concat(ctx.SWResponseChunks).toString());
+            console.log('resp : ')
+            console.log(respData.command)
+            console.log('----------------------------------------------------')
+
           } catch (e) {
             // Error decrypting the data, log and do not fire an event
             self.log({ type: 'debug', source: 'proxy', message: `Error decrypting request data - ignoring. ${e}` });
